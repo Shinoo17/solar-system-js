@@ -40,6 +40,13 @@ const TEXTURE_URL = "./texture/8k_sun.jpg";
 const SUN_RADIUS = 2;
 const BASE_SPIN_SPEED = 0.15; // radians per second at speed 1.0
 
+// The GUI exposes one neutral streak-length multiplier. Camera distance
+// automatically scales it from a compact close-up to a longer wide view.
+const STREAK_LENGTH_NEAR_SCALE = 0.43;
+const STREAK_LENGTH_FAR_SCALE = 1.5;
+const STREAK_ZOOM_NEAR_DISTANCE = 4.2;
+const STREAK_ZOOM_FAR_DISTANCE = 10;
+
 const settings = {
   autoRotate: true,
   rotationSpeed: 0.5,
@@ -52,7 +59,7 @@ const settings = {
   coronaIntensity: 1.85,   // brightness of the outer halo
   coronaSize: 1.1,         // how far the halo spreads (in sun radii)
   streakIntensity: 1.0,    // brightness of the corona streaks
-  streakLength: 0.55,      // how far streaks reach (fraction of shell depth)
+  streakLength: 1.0,       // master multiplier; camera distance supplies the scale
   streakDensity: 0.45,     // how many streaks survive the noise threshold
   streakSpeed: 0.3,        // how fast the streak noise flows
   streakOpacity: 0.65,     // overall transparency of the streak layers
@@ -143,7 +150,7 @@ controls.enableDamping = true;   // gives the camera a smooth, weighty feel
 controls.dampingFactor = 0.06;
 controls.enablePan = false;
 controls.minDistance = 3.2;
-controls.maxDistance = 10;
+controls.maxDistance = 20;
 
 // ---------- Starfield ----------
 // A few hundred tiny points scattered far away on all sides.
@@ -495,8 +502,8 @@ glowFolder.add(settings, "coronaSize", 0.2, 3, 0.01).name("Corona size")
 const streaksFolder = gui.addFolder("Corona streaks");
 streaksFolder.add(settings, "streakIntensity", 0, 3, 0.01).name("Intensity")
   .onChange(value => { streakIntensity.value = value; });
-streaksFolder.add(settings, "streakLength", 0.05, 1, 0.01).name("Streak length")
-  .onChange(value => { streakLength.value = value; });
+streaksFolder.add(settings, "streakLength", 0.1, 2, 0.01)
+  .name("Streak length");
 streaksFolder.add(settings, "streakDensity", 0, 1, 0.01).name("Density")
   .onChange(value => { streakDensity.value = value; });
 streaksFolder.add(settings, "streakSpeed", 0, 2, 0.01).name("Flow speed");
@@ -620,6 +627,32 @@ function animate() {
     .addScaledVector(towardCamera, -SUN_RADIUS * 0.25);
 
   controls.update(); // needed for the damping to work
+
+  // Shorten the streaks near the Sun and gradually extend them as the
+  // camera zooms out. The fixed distance range makes the full effect
+  // visible before the camera reaches its maximum zoom-out distance.
+  const cameraDistance = camera.position.distanceTo(controls.target);
+  const zoomRatio = THREE.MathUtils.smoothstep(
+    cameraDistance,
+    STREAK_ZOOM_NEAR_DISTANCE,
+    STREAK_ZOOM_FAR_DISTANCE,
+  );
+  const distanceScale = THREE.MathUtils.lerp(
+    STREAK_LENGTH_NEAR_SCALE,
+    STREAK_LENGTH_FAR_SCALE,
+    zoomRatio,
+  );
+  const targetStreakLength = settings.streakLength * distanceScale;
+
+  // Ease toward the target so wheel and touch zooming do not make the
+  // corona jump abruptly. This remains consistent across frame rates.
+  const streakLengthEase = 1 - Math.exp(-7 * deltaTime);
+  streakLength.value = THREE.MathUtils.lerp(
+    streakLength.value,
+    targetStreakLength,
+    streakLengthEase,
+  );
+
   renderer.render(scene, camera);
 }
 
