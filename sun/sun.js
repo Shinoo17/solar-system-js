@@ -56,6 +56,7 @@ const settings = {
   streakDensity: 0.45,     // how many streaks survive the noise threshold
   streakSpeed: 0.3,        // how fast the streak noise flows
   streakOpacity: 0.65,     // overall transparency of the streak layers
+  showFps: true,           // little frame-rate readout in the corner
 };
 
 // Respect the user's "reduce motion" preference: the streaks still
@@ -69,6 +70,7 @@ if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
 const loadingOverlay = document.getElementById("loading");
 const errorOverlay = document.getElementById("error");
 const errorText = document.getElementById("errorText");
+const fpsMeter = document.getElementById("fpsMeter");
 
 function showError(error) {
   console.error(error);
@@ -296,9 +298,9 @@ drawCorona();
 updateCoronaScale();
 
 // ---------- Corona streaks ----------
-// Three transparent sphere shells around the Sun, each slightly
-// bigger than the last. Their material ignores the sphere's own
-// surface and instead works per screen pixel:
+// Faint radial plasma streaks around the limb. One transparent
+// sphere shell (2x the Sun) whose material ignores the sphere's
+// own surface and instead works per screen pixel:
 //
 //   1. Shoot the view ray for this pixel and find how far it
 //      passes from the Sun's center ("apparent radius"). That
@@ -311,9 +313,17 @@ updateCoronaScale();
 //   3. Noise also decides each streak's length and brightness,
 //      so they are irregular and sparse instead of a uniform fan.
 //
-// The shells use BackSide (we see their far half) so they keep
-// working even when the camera dips inside the biggest shell,
-// and the Sun's own depth buffer hides everything behind the disc.
+// Three noise LAYERS (short fine streaks / medium / long sparse
+// wisps) are summed inside one material. They started life as
+// three separate shells, but every shell repeated the ray math
+// and re-shaded the same limb pixels; merged, the same picture
+// costs roughly a third of the fragment work and one draw call.
+//
+// BackSide keeps the shell visible even when the camera dips
+// inside it, and the Sun's depth buffer hides everything behind
+// the disc. Blending is One + One with the color pre-multiplied
+// in the shader — exactly what the three additive shells used to
+// add up to, just done in a single pass.
 
 const streakIntensity = uniform(settings.streakIntensity);
 const streakLength = uniform(settings.streakLength);
@@ -325,18 +335,29 @@ const streakPhase = uniform(0); // advanced a little every frame
 const streakColorInner = uniform(new THREE.Color("#ffe9c4"));
 const streakColorOuter = uniform(new THREE.Color("#ff8f3c"));
 
-function createCoronaShell({ scale, frequency, sparsity, weight, drift }) {
-  // -- Where is this pixel relative to the Sun's silhouette? --
-  const rayDirection = positionWorld.sub(cameraPosition).normalize();
-  const toSunCenter = cameraPosition.negate(); // the Sun sits at the origin
-  const alongRay = toSunCenter.dot(rayDirection);
-  const closestPoint = cameraPosition.add(rayDirection.mul(alongRay));
-  const apparentRadius = closestPoint.length();
-  const radialDirection = closestPoint.div(apparentRadius.max(0.001));
+const CORONA_SHELL_SCALE = 2.0; // outermost layer's reach, in Sun radii
 
-  // 0 at the Sun's edge, 1 at this shell's outer rim
-  const shellDepth = SUN_RADIUS * scale - SUN_RADIUS;
-  const reach = apparentRadius.sub(SUN_RADIUS).div(shellDepth).clamp(0, 1);
+// -- Where is this pixel relative to the Sun's silhouette? --
+// Computed once and shared by all three layers.
+const rayDirection = positionWorld.sub(cameraPosition).normalize();
+const toSunCenter = cameraPosition.negate(); // the Sun sits at the origin
+const alongRay = toSunCenter.dot(rayDirection);
+const closestPoint = cameraPosition.add(rayDirection.mul(alongRay));
+const apparentRadius = closestPoint.length();
+const radialDirection = closestPoint.div(apparentRadius.max(0.001));
+
+// Fade in right at the limb, so the disc itself never brightens
+const limbFade = apparentRadius.smoothstep(SUN_RADIUS * 0.98, SUN_RADIUS * 1.015);
+
+// One slow shimmer shared by every layer
+const flicker = mx_noise_float(
+  radialDirection.mul(2.5).add(vec3(0, streakPhase.mul(0.6), streakPhase.mul(0.4)))
+).mul(0.5).add(0.5).mul(0.35).add(0.75);
+
+function coronaLayer({ scale, frequency, octaves, sparsity, weight, drift }) {
+  // 0 at the Sun's edge, 1 at this layer's outer reach
+  const layerDepth = SUN_RADIUS * scale - SUN_RADIUS;
+  const reach = apparentRadius.sub(SUN_RADIUS).div(layerDepth).clamp(0, 1);
 
   // -- Streak pattern from noise --
   // A tiny reach-dependent shear bends the streaks so they are
@@ -350,7 +371,7 @@ function createCoronaShell({ scale, frequency, sparsity, weight, drift }) {
 
   // Only the peaks of the noise survive the threshold, which is
   // what keeps the streaks sparse. Density lowers the threshold.
-  const noiseValue = mx_fractal_noise_float(samplePoint, 3, 2.3, 0.55);
+  const noiseValue = mx_fractal_noise_float(samplePoint, octaves, 2.3, 0.55);
   const threshold = float(0.55 + sparsity).sub(streakDensity.mul(0.45));
   const streakMask = noiseValue.smoothstep(threshold, threshold.add(0.35));
 
@@ -368,13 +389,7 @@ function createCoronaShell({ scale, frequency, sparsity, weight, drift }) {
     radialDirection.mul(frequency * 1.4).add(vec3(3.1, 91.2, 41.5))
   ).mul(0.5).add(0.5).mul(0.55).add(0.6);
 
-  const flicker = mx_noise_float(
-    radialDirection.mul(2.5).add(vec3(0, streakPhase.mul(0.6), streakPhase.mul(0.4)))
-  ).mul(0.5).add(0.5).mul(0.35).add(0.75);
-
-  // Fade in right at the limb (never brighten the disc itself)
-  // and fade out well before the shell's hard geometric rim.
-  const limbFade = apparentRadius.smoothstep(SUN_RADIUS * 0.98, SUN_RADIUS * 1.015);
+  // Fade out well before the layer's outer rim, no hard edge
   const rimFade = reach.oneMinus().smoothstep(0, 0.25);
 
   const strength = streakMask
@@ -384,27 +399,41 @@ function createCoronaShell({ scale, frequency, sparsity, weight, drift }) {
 
   const color = mix(streakColorInner, streakColorOuter, reach.smoothstep(0, 0.75));
 
-  const material = new THREE.MeshBasicNodeMaterial({
-    side: THREE.BackSide,
-    transparent: true,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-  });
-  material.outputNode = vec4(color.mul(strength), strength.mul(streakOpacity));
-
-  const mesh = new THREE.Mesh(new THREE.SphereGeometry(SUN_RADIUS, 64, 32), material);
-  mesh.scale.setScalar(scale);
-  return mesh;
+  // Pre-multiplied additive contribution. The strength² matches
+  // what AdditiveBlending's srcColor × srcAlpha used to produce,
+  // so the merged shell looks identical to the three old ones.
+  return color.mul(strength.mul(strength));
 }
 
-// Inner shell: many short fine streaks hugging the surface.
-// Outer shells: progressively sparser, wider, fainter wisps.
-const coronaShells = [
-  createCoronaShell({ scale: 1.3, frequency: 14.0, sparsity: 0.0,  weight: 1.0,  drift: 1.0 }),
-  createCoronaShell({ scale: 1.6, frequency: 9.0,  sparsity: 0.18, weight: 0.55, drift: 0.7 }),
-  createCoronaShell({ scale: 2.0, frequency: 5.5,  sparsity: 0.34, weight: 0.32, drift: 0.5 }),
-];
-coronaShells.forEach(shell => sunGroup.add(shell));
+// Inner layer: many short fine streaks hugging the surface.
+// Outer layers: progressively sparser, wider, fainter wisps
+// (and cheaper: 2 noise octaves instead of 3 — the extra detail
+// octave is invisible at their lower frequencies).
+const coronaLight = coronaLayer(
+  { scale: 1.3, frequency: 14.0, octaves: 3, sparsity: 0.0,  weight: 1.0,  drift: 1.0 })
+  .add(coronaLayer(
+  { scale: 1.6, frequency: 9.0,  octaves: 2, sparsity: 0.12, weight: 0.55, drift: 0.7 }))
+  .add(coronaLayer(
+  { scale: 2.0, frequency: 5.5,  octaves: 2, sparsity: 0.26, weight: 0.32, drift: 0.5 }))
+  .mul(streakOpacity);
+
+const streakMaterial = new THREE.MeshBasicNodeMaterial({
+  side: THREE.BackSide,
+  transparent: true,
+  depthWrite: false,
+});
+streakMaterial.blending = THREE.CustomBlending;
+streakMaterial.blendEquation = THREE.AddEquation;
+streakMaterial.blendSrc = THREE.OneFactor;
+streakMaterial.blendDst = THREE.OneFactor;
+streakMaterial.outputNode = vec4(coronaLight, 0);
+
+const coronaStreakMesh = new THREE.Mesh(
+  new THREE.SphereGeometry(SUN_RADIUS, 64, 32),
+  streakMaterial
+);
+coronaStreakMesh.scale.setScalar(CORONA_SHELL_SCALE);
+sunGroup.add(coronaStreakMesh);
 
 // ---------- Apply settings ----------
 
@@ -473,6 +502,12 @@ streaksFolder.add(settings, "streakDensity", 0, 1, 0.01).name("Density")
 streaksFolder.add(settings, "streakSpeed", 0, 2, 0.01).name("Flow speed");
 streaksFolder.add(settings, "streakOpacity", 0, 1, 0.01).name("Opacity")
   .onChange(value => { streakOpacity.value = value; });
+
+function applyFpsVisibility() {
+  fpsMeter.classList.toggle("hidden", !settings.showFps);
+}
+gui.add(settings, "showFps").name("Show FPS").onChange(applyFpsVisibility);
+applyFpsVisibility();
 
 // If the user zooms with the mouse wheel, keep the GUI slider in sync.
 controls.addEventListener("change", () => {
@@ -550,8 +585,22 @@ loadingOverlay.classList.add("hidden");
 const clock = new THREE.Clock();
 const towardCamera = new THREE.Vector3();
 
+// FPS: count frames, refresh the label twice a second
+let fpsFrames = 0;
+let fpsElapsed = 0;
+
 function animate() {
   const deltaTime = clock.getDelta();
+
+  fpsFrames++;
+  fpsElapsed += deltaTime;
+  if (fpsElapsed >= 0.5) {
+    if (settings.showFps) {
+      fpsMeter.textContent = `${Math.round(fpsFrames / fpsElapsed)} fps`;
+    }
+    fpsFrames = 0;
+    fpsElapsed = 0;
+  }
 
   // Auto rotation (paused while the user is dragging the Sun)
   if (settings.autoRotate && !draggingSun) {
