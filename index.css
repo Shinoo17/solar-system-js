@@ -152,16 +152,16 @@ body {
   padding: 9px 24px;
   overflow-x: auto;
   border-radius: 100px;
-  /* background: rgba(3, 6, 12, 0.16);
+  background: rgba(3, 6, 12, 0.06);
   -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px); */
+  backdrop-filter: blur(8px);
   transform: translateX(-50%);
   scrollbar-width: none; /* hide scrollbar, nav can still scroll on tiny screens */
   overscroll-behavior-x: contain;
   scroll-padding-inline: 16px;
 }
 
-.nav::-webkit-scrollbar { display: none; }
+.nav::-webkit-scrollbar { display: none;}
 
 .nav-item {
   flex: 0 0 auto;

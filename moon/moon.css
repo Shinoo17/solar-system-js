@@ -61,6 +61,24 @@ body {
   text-transform: uppercase;
 }
 
+/* ---------- FPS meter ---------- */
+
+.fps-meter {
+  position: fixed;
+  right: 30px;
+  bottom: 24px;
+  z-index: 5;
+  pointer-events: none;
+  user-select: none;
+  color: rgba(255, 255, 255, 0.65);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+}
+
+.fps-meter.hidden { display: none; }
+
 /* ---------- Loading and error overlays ---------- */
 
 .overlay {

@@ -43,6 +43,7 @@ const settings = {
   roughness: 0.65,
   metalness: 0.0,
   colorTint: "#ffffff",
+  showFps: true,         // little frame-rate readout in the corner
 };
 
 // ---------- Loading / error helpers ----------
@@ -50,6 +51,7 @@ const settings = {
 const loadingOverlay = document.getElementById("loading");
 const errorOverlay = document.getElementById("error");
 const errorText = document.getElementById("errorText");
+const fpsMeter = document.getElementById("fpsMeter");
 
 function showError(error) {
   console.error(error);
@@ -302,6 +304,12 @@ materialFolder.add(settings, "roughness", 0, 1, 0.01).name("Roughness")
 materialFolder.addColor(settings, "colorTint").name("Color tint")
   .onChange(value => { planetMaterial.color.set(value); });
 
+function applyFpsVisibility() {
+  fpsMeter.classList.toggle("hidden", !settings.showFps);
+}
+gui.add(settings, "showFps").name("Show FPS").onChange(applyFpsVisibility);
+applyFpsVisibility();
+
 // If the user zooms with the mouse wheel, keep the GUI slider in sync.
 controls.addEventListener("change", () => {
   if (applyingCameraDistance) return;
@@ -371,8 +379,22 @@ loadingOverlay.classList.add("hidden");
 
 const clock = new THREE.Clock();
 
+// FPS: count frames, refresh the label twice a second
+let fpsFrames = 0;
+let fpsElapsed = 0;
+
 function animate() {
   const deltaTime = clock.getDelta();
+
+  fpsFrames++;
+  fpsElapsed += deltaTime;
+  if (fpsElapsed >= 0.5) {
+    if (settings.showFps) {
+      fpsMeter.textContent = `${Math.round(fpsFrames / fpsElapsed)} fps`;
+    }
+    fpsFrames = 0;
+    fpsElapsed = 0;
+  }
 
   // Auto rotation (paused while the user is dragging the planet)
   if (settings.autoRotate && !draggingPlanet) {

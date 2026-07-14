@@ -15,9 +15,15 @@
 import * as THREE from "three/webgpu";
 import {
   cameraPosition,
+  Fn,
+  mx_noise_float,
   normalWorldGeometry,
   positionWorld,
+  texture,
   uniform,
+  uv,
+  vec2,
+  vec3,
   vec4,
 } from "three/tsl";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -25,13 +31,23 @@ import GUI from "lil-gui";
 
 // ---------- Page settings (also editable from the GUI) ----------
 
-const TEXTURE_URL = "./texture/4k_venus_atmosphere.jpg";
+const SURFACE_TEXTURE_URL = "./texture/8k_venus_surface.jpg";
+const CLOUD_TEXTURE_URL = "./texture/4k_venus_atmosphere.jpg";
 const PLANET_RADIUS = 2;
 const BASE_SPIN_SPEED = 0.15; // radians per second at speed 1.0
 
+// Set this to false to start with the clouds frozen.
+const CONFIG = {
+  cloudAnimation: true,
+};
+
 const settings = {
+  cloudAnimation: CONFIG.cloudAnimation,
+  cloudSpeed: 0.5,
+  cloudTurbulence: 0.7,
+  cloudOpacity: 0.96,
   autoRotate: true,
-  rotationSpeed: 0.3,
+  rotationSpeed: 0.1,
   axialTiltDegrees: 177.4, // Venus is flipped almost upside down (retrograde spin)
   cameraDistance: 6.0,
   lightIntensity: 3.2,
@@ -43,6 +59,7 @@ const settings = {
   roughness: 0.85,
   metalness: 0.0,
   colorTint: "#ffffff",
+  showFps: true,         // little frame-rate readout in the corner
 };
 
 // ---------- Loading / error helpers ----------
@@ -50,6 +67,7 @@ const settings = {
 const loadingOverlay = document.getElementById("loading");
 const errorOverlay = document.getElementById("error");
 const errorText = document.getElementById("errorText");
+const fpsMeter = document.getElementById("fpsMeter");
 
 function showError(error) {
   console.error(error);
@@ -83,6 +101,8 @@ function loadTexture(url) {
       url,
       texture => {
         texture.colorSpace = THREE.SRGBColorSpace;
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.ClampToEdgeWrapping;
         texture.anisotropy = renderer.capabilities?.getMaxAnisotropy?.() || 8;
         resolve(texture);
       },
@@ -178,9 +198,12 @@ function createStarfield() {
 
 scene.add(createStarfield());
 
-// ---------- The planet ----------
+// ---------- The planet and its cloud deck ----------
 
-const planetTexture = await loadTexture(TEXTURE_URL);
+const [surfaceTexture, cloudTexture] = await Promise.all([
+  loadTexture(SURFACE_TEXTURE_URL),
+  loadTexture(CLOUD_TEXTURE_URL),
+]);
 
 // This group carries the axial tilt. The mesh spins inside it,
 // so the spin axis stays tilted no matter how fast it rotates.
@@ -189,17 +212,63 @@ scene.add(planetGroup);
 
 const planetGeometry = new THREE.SphereGeometry(PLANET_RADIUS, 128, 64);
 
-// StandardMaterial reacts to lights: bright toward the sun light,
-// dark away from it, with a soft terminator line in between.
-// That lighting is what makes the sphere LOOK like a sphere.
+// The rocky surface rotates slowly underneath the atmosphere.
 const planetMaterial = new THREE.MeshStandardMaterial({
-  map: planetTexture,
+  map: surfaceTexture,
   roughness: settings.roughness,
-  
 });
 
 const planetMesh = new THREE.Mesh(planetGeometry, planetMaterial);
 planetGroup.add(planetMesh);
+
+// ---------- Animated super-rotating clouds ----------
+// Venus's cloud deck moves much faster than its rocky surface.
+// The shader slides the texture sideways and adds a small noise offset.
+const cloudPhase = uniform(0);
+const cloudNoiseTime = uniform(0);
+const cloudTurbulence = uniform(settings.cloudTurbulence);
+const cloudOpacity = uniform(settings.cloudOpacity);
+
+const animatedCloudColor = Fn(() => {
+  const originalUV = uv();
+  const movedX = originalUV.x.add(cloudPhase);
+
+  // Two noise samples bend the cloud texture in different directions.
+  const noisePosition = vec3(
+    originalUV.x.mul(4),
+    originalUV.y.mul(8),
+    cloudNoiseTime,
+  );
+  const noiseX = mx_noise_float(noisePosition);
+  const noiseY = mx_noise_float(noisePosition.add(vec3(7.3, 11.1, 3.7)));
+  const distortion = vec2(noiseX, noiseY).mul(cloudTurbulence.mul(0.008));
+
+  // A small moving wave makes neighboring cloud bands shear sideways.
+  const windWave = originalUV.y.mul(24)
+    .add(cloudNoiseTime.mul(0.8))
+    .sin()
+    .mul(cloudTurbulence.mul(0.004));
+
+  return texture(
+    cloudTexture,
+    vec2(movedX.add(windWave), originalUV.y).add(distortion),
+  ).rgb;
+});
+
+const cloudMaterial = new THREE.MeshStandardNodeMaterial({
+  roughness: 0.9,
+  metalness: 0,
+  transparent: true,
+  depthWrite: false,
+});
+cloudMaterial.colorNode = animatedCloudColor();
+cloudMaterial.opacityNode = cloudOpacity;
+
+const cloudMesh = new THREE.Mesh(
+  new THREE.SphereGeometry(PLANET_RADIUS * 1.008, 128, 64),
+  cloudMaterial,
+);
+planetGroup.add(cloudMesh);
 
 // ---------- Atmosphere haze (the glow) ----------
 // A slightly larger sphere rendered inside-out (BackSide), so we
@@ -274,6 +343,14 @@ planetFolder.add(settings, "rotationSpeed", 0, 2, 0.01).name("Rotation speed");
 planetFolder.add(settings, "axialTiltDegrees", -180, 180, 0.1)
   .name("Axial tilt (deg)").onChange(applyAxialTilt);
 
+const cloudFolder = gui.addFolder("Cloud animation");
+cloudFolder.add(settings, "cloudAnimation").name("Animate clouds");
+cloudFolder.add(settings, "cloudSpeed", 0, 3, 0.01).name("Cloud speed");
+cloudFolder.add(settings, "cloudTurbulence", 0, 2, 0.01).name("Turbulence")
+  .onChange(value => { cloudTurbulence.value = value; });
+cloudFolder.add(settings, "cloudOpacity", 0.7, 1, 0.01).name("Cloud opacity")
+  .onChange(value => { cloudOpacity.value = value; });
+
 const cameraFolder = gui.addFolder("Camera");
 const distanceController = cameraFolder
   .add(settings, "cameraDistance", controls.minDistance, controls.maxDistance, 0.1)
@@ -301,6 +378,12 @@ materialFolder.add(settings, "roughness", 0, 1, 0.01).name("Roughness")
 
 materialFolder.addColor(settings, "colorTint").name("Color tint")
   .onChange(value => { planetMaterial.color.set(value); });
+
+function applyFpsVisibility() {
+  fpsMeter.classList.toggle("hidden", !settings.showFps);
+}
+gui.add(settings, "showFps").name("Show FPS").onChange(applyFpsVisibility);
+applyFpsVisibility();
 
 // If the user zooms with the mouse wheel, keep the GUI slider in sync.
 controls.addEventListener("change", () => {
@@ -371,14 +454,47 @@ loadingOverlay.classList.add("hidden");
 
 const clock = new THREE.Clock();
 
+// FPS: count frames, refresh the label twice a second
+let fpsFrames = 0;
+let fpsElapsed = 0;
+let currentCloudPhase = 0;
+let currentNoiseTime = 0;
+let noiseDirection = 1;
+
 function animate() {
   const deltaTime = clock.getDelta();
+
+  fpsFrames++;
+  fpsElapsed += deltaTime;
+  if (fpsElapsed >= 0.5) {
+    if (settings.showFps) {
+      fpsMeter.textContent = `${Math.round(fpsFrames / fpsElapsed)} fps`;
+    }
+    fpsFrames = 0;
+    fpsElapsed = 0;
+  }
+
+  // Pausing stops the shader clock and keeps the latest cloud frame.
+  if (settings.cloudAnimation) {
+    currentCloudPhase = (
+      currentCloudPhase - deltaTime * 0.025 * settings.cloudSpeed + 1
+    ) % 1;
+    cloudPhase.value = currentCloudPhase;
+
+    currentNoiseTime += deltaTime * 0.035 * noiseDirection;
+    if (currentNoiseTime > 240 || currentNoiseTime < 0) {
+      noiseDirection *= -1;
+      currentNoiseTime = THREE.MathUtils.clamp(currentNoiseTime, 0, 240);
+    }
+    cloudNoiseTime.value = currentNoiseTime;
+  }
 
   // Auto rotation (paused while the user is dragging the planet)
   if (settings.autoRotate && !draggingPlanet) {
     spinAngle += deltaTime * BASE_SPIN_SPEED * settings.rotationSpeed;
   }
   planetMesh.rotation.y = spinAngle;
+  cloudMesh.rotation.y = spinAngle;
 
   controls.update(); // needed for the damping to work
   renderer.render(scene, camera);

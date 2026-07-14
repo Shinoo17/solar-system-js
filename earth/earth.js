@@ -48,7 +48,7 @@ const BASE_SPIN_SPEED = 0.15; // radians per second at speed 1.0
 
 const settings = {
   autoRotate: true,
-  rotationSpeed: 0.5,
+  rotationSpeed: 0.25,
   axialTiltDegrees: 23.4,  // Earth's real tilt — the reason we have seasons
   cameraDistance: 6.0,
   lightIntensity: 1.0,     // brightness of the day side
@@ -62,6 +62,7 @@ const settings = {
   cloudSpecular: 0.24,
   landSpecular: 0.12,
   waterSpecular: 0.66,
+  showFps: true,           // little frame-rate readout in the corner
 };
 
 // ---------- Loading / error helpers ----------
@@ -69,6 +70,7 @@ const settings = {
 const loadingOverlay = document.getElementById("loading");
 const errorOverlay = document.getElementById("error");
 const errorText = document.getElementById("errorText");
+const fpsMeter = document.getElementById("fpsMeter");
 
 function showError(error) {
   console.error(error);
@@ -400,6 +402,12 @@ materialFolder.add(settings, "landSpecular", 0, 1.5, 0.01).name("Land specular")
 materialFolder.add(settings, "waterSpecular", 0, 2, 0.01).name("Water specular")
   .onChange(value => { waterSpecularStrength.value = value; });
 
+function applyFpsVisibility() {
+  fpsMeter.classList.toggle("hidden", !settings.showFps);
+}
+gui.add(settings, "showFps").name("Show FPS").onChange(applyFpsVisibility);
+applyFpsVisibility();
+
 // If the user zooms with the mouse wheel, keep the GUI slider in sync.
 controls.addEventListener("change", () => {
   if (applyingCameraDistance) return;
@@ -471,8 +479,22 @@ loadingOverlay.classList.add("hidden");
 
 const clock = new THREE.Clock();
 
+// FPS: count frames, refresh the label twice a second
+let fpsFrames = 0;
+let fpsElapsed = 0;
+
 function animate() {
   const deltaTime = clock.getDelta();
+
+  fpsFrames++;
+  fpsElapsed += deltaTime;
+  if (fpsElapsed >= 0.5) {
+    if (settings.showFps) {
+      fpsMeter.textContent = `${Math.round(fpsFrames / fpsElapsed)} fps`;
+    }
+    fpsFrames = 0;
+    fpsElapsed = 0;
+  }
 
   // Auto rotation (paused while the user is dragging the planet)
   if (settings.autoRotate && !draggingPlanet) {
