@@ -1,0 +1,148 @@
+/* ============================================================
+   Mercury — standalone page styles
+   Everything this page needs lives inside the mercury/ folder.
+   ============================================================ */
+
+* { box-sizing: border-box; }
+
+:root {
+  --accent: #b8b2a8; /* dusty gray accent */
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #030409;
+  color: rgba(255, 255, 255, 0.9);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* ---------- Canvas fills the whole screen ---------- */
+
+#planetCanvas {
+  position: fixed;
+  inset: 0;
+  display: block;
+  cursor: grab;
+  touch-action: none; /* let our JS handle touch drags */
+}
+
+#planetCanvas:active { cursor: grabbing; }
+
+/* ---------- Small title in the corner ---------- */
+
+.page-title {
+  position: fixed;
+  top: 26px;
+  left: 30px;
+  z-index: 5;
+  pointer-events: none;
+  user-select: none;
+}
+
+.page-title h1 {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 17px;
+  font-weight: 300;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+}
+
+.page-title p {
+  margin: 7px 0 0;
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 10px;
+  font-weight: 300;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+/* ---------- Loading and error overlays ---------- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 50% 44%, #0a0f1c 0%, #030409 62%);
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 450ms ease, visibility 450ms ease;
+}
+
+.overlay.hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.overlay-panel { text-align: center; }
+
+.pulse-dot {
+  width: 10px;
+  height: 10px;
+  margin: 0 auto 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 18px var(--accent);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.45; transform: scale(0.85); }
+  50%      { opacity: 1;    transform: scale(1); }
+}
+
+.overlay-title {
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 12px;
+  font-weight: 300;
+  letter-spacing: 0.4em;
+  text-indent: 0.4em;
+  text-transform: uppercase;
+}
+
+.overlay-text {
+  max-width: min(440px, calc(100vw - 48px));
+  margin: 14px auto 0;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 11px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+
+/* Error state: the dot turns red and stops pulsing */
+.overlay.error .pulse-dot {
+  background: #ff6b6b;
+  box-shadow: 0 0 18px rgba(255, 107, 107, 0.6);
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse-dot { animation: none; }
+}
+
+/* ---------- lil-gui: match the page theme ---------- */
+
+.lil-gui {
+  --background-color: rgba(8, 10, 18, 0.78);
+  --title-background-color: rgba(255, 255, 255, 0.04);
+  --widget-color: rgba(255, 255, 255, 0.09);
+  --hover-color: rgba(255, 255, 255, 0.14);
+  --focus-color: rgba(255, 255, 255, 0.18);
+  --number-color: var(--accent);
+  --font-size: 11px;
+}
+
+.lil-gui.root {
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}

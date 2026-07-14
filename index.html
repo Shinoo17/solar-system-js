@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Solar System</title>
+  <link rel="stylesheet" href="./index.css" />
+</head>
+<body>
+
+  <!-- The iframe shows one planet page at a time.
+       Each planet page is a fully standalone website in its own folder. -->
+  <iframe id="viewer" title="Planet viewer" allow="fullscreen"></iframe>
+
+  <!-- Loading screen shown on first load and while switching planets.
+       The stars keep the navigator in the same space setting as every body page. -->
+  <div id="loading" class="loading">
+    <div class="loading-stars" aria-hidden="true"></div>
+    <div class="loading-orbit">
+      <div class="loading-dot"></div>
+    </div>
+    <div class="loading-name" id="loadingName">Solar System</div>
+  </div>
+
+  <!-- Bottom navigation. index.js fills this with one button per body. -->
+  <nav id="nav" class="nav" aria-label="Explore solar system bodies"></nav>
+
+  <script type="module" src="./index.js"></script>
+</body>
+</html>

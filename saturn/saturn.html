@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Saturn — Solar System</title>
+  <link rel="stylesheet" href="./saturn.css" />
+
+  <!-- Import map: tells the browser where to fetch the libraries.
+       No build tools needed — this works as a plain static page.
+       This page uses the WebGPU build of Three.js and TSL
+       (Three Shading Language) for the glow materials. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.181.0/build/three.webgpu.js",
+      "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.181.0/build/three.webgpu.js",
+      "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.181.0/build/three.tsl.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.181.0/examples/jsm/",
+      "lil-gui": "https://cdn.jsdelivr.net/npm/lil-gui@0.20.0/dist/lil-gui.esm.min.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <canvas id="planetCanvas" aria-label="3D view of Saturn"></canvas>
+
+  <header class="page-title">
+    <h1>Saturn</h1>
+    <p>The ringed planet</p>
+  </header>
+
+  <!-- Shown while the textures are loading -->
+  <div id="loading" class="overlay">
+    <div class="overlay-panel">
+      <div class="pulse-dot"></div>
+      <div class="overlay-title">Loading Saturn</div>
+    </div>
+  </div>
+
+  <!-- Shown only if something fails (for example a missing texture) -->
+  <div id="error" class="overlay error hidden">
+    <div class="overlay-panel">
+      <div class="pulse-dot"></div>
+      <div class="overlay-title">Something went wrong</div>
+      <p class="overlay-text" id="errorText"></p>
+    </div>
+  </div>
+
+  <script type="module" src="./saturn.js"></script>
+</body>
+</html>
