@@ -21,9 +21,14 @@
 import * as THREE from "three/webgpu";
 import {
   cameraPosition,
+  float,
+  mix,
+  mx_fractal_noise_float,
+  mx_noise_float,
   normalWorldGeometry,
   positionWorld,
   uniform,
+  vec3,
   vec4,
 } from "three/tsl";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -46,7 +51,18 @@ const settings = {
   glowRadius: 1.067,       // almost on the surface, like the shared edge glow
   coronaIntensity: 1.85,   // brightness of the outer halo
   coronaSize: 1.1,         // how far the halo spreads (in sun radii)
+  streakIntensity: 1.0,    // brightness of the corona streaks
+  streakLength: 0.55,      // how far streaks reach (fraction of shell depth)
+  streakDensity: 0.45,     // how many streaks survive the noise threshold
+  streakSpeed: 0.3,        // how fast the streak noise flows
+  streakOpacity: 0.65,     // overall transparency of the streak layers
 };
+
+// Respect the user's "reduce motion" preference: the streaks still
+// render, they just stop flowing (rotation stays — it IS the content).
+if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+  settings.streakSpeed = 0;
+}
 
 // ---------- Loading / error helpers ----------
 
@@ -279,6 +295,117 @@ function updateCoronaScale() {
 drawCorona();
 updateCoronaScale();
 
+// ---------- Corona streaks ----------
+// Three transparent sphere shells around the Sun, each slightly
+// bigger than the last. Their material ignores the sphere's own
+// surface and instead works per screen pixel:
+//
+//   1. Shoot the view ray for this pixel and find how far it
+//      passes from the Sun's center ("apparent radius"). That
+//      says exactly where the pixel sits: on the disc, just off
+//      the edge, or far out.
+//   2. The DIRECTION of that closest point picks a value from a
+//      3D noise field. Because the direction is the same all the
+//      way along a ray, one noise blob smears into a thin streak
+//      pointing radially outward — like combed plasma.
+//   3. Noise also decides each streak's length and brightness,
+//      so they are irregular and sparse instead of a uniform fan.
+//
+// The shells use BackSide (we see their far half) so they keep
+// working even when the camera dips inside the biggest shell,
+// and the Sun's own depth buffer hides everything behind the disc.
+
+const streakIntensity = uniform(settings.streakIntensity);
+const streakLength = uniform(settings.streakLength);
+const streakDensity = uniform(settings.streakDensity);
+const streakOpacity = uniform(settings.streakOpacity);
+const streakPhase = uniform(0); // advanced a little every frame
+
+// Warm white at the surface, deeper orange further out
+const streakColorInner = uniform(new THREE.Color("#ffe9c4"));
+const streakColorOuter = uniform(new THREE.Color("#ff8f3c"));
+
+function createCoronaShell({ scale, frequency, sparsity, weight, drift }) {
+  // -- Where is this pixel relative to the Sun's silhouette? --
+  const rayDirection = positionWorld.sub(cameraPosition).normalize();
+  const toSunCenter = cameraPosition.negate(); // the Sun sits at the origin
+  const alongRay = toSunCenter.dot(rayDirection);
+  const closestPoint = cameraPosition.add(rayDirection.mul(alongRay));
+  const apparentRadius = closestPoint.length();
+  const radialDirection = closestPoint.div(apparentRadius.max(0.001));
+
+  // 0 at the Sun's edge, 1 at this shell's outer rim
+  const shellDepth = SUN_RADIUS * scale - SUN_RADIUS;
+  const reach = apparentRadius.sub(SUN_RADIUS).div(shellDepth).clamp(0, 1);
+
+  // -- Streak pattern from noise --
+  // A tiny reach-dependent shear bends the streaks so they are
+  // not perfectly straight spokes; the phase offset makes the
+  // whole field drift and flicker very slowly.
+  const phase = streakPhase.mul(drift);
+  const bend = radialDirection.cross(vec3(0, 1, 0)).mul(reach.mul(0.35));
+  const samplePoint = radialDirection.mul(frequency)
+    .add(bend)
+    .add(vec3(phase.mul(0.31), phase.mul(0.17), phase.mul(-0.23)));
+
+  // Only the peaks of the noise survive the threshold, which is
+  // what keeps the streaks sparse. Density lowers the threshold.
+  const noiseValue = mx_fractal_noise_float(samplePoint, 3, 2.3, 0.55);
+  const threshold = float(0.55 + sparsity).sub(streakDensity.mul(0.45));
+  const streakMask = noiseValue.smoothstep(threshold, threshold.add(0.35));
+
+  // Each streak gets its own length and brightness from more noise
+  // (sampled at fixed offsets so the values are independent).
+  const lengthNoise = mx_noise_float(
+    radialDirection.mul(frequency * 0.55).add(vec3(13.7, 31.4, 7.9))
+  ).mul(0.5).add(0.5);
+  // Squaring the noise biases toward short streaks with a few long ones
+  const localLength = streakLength
+    .mul(lengthNoise.mul(lengthNoise).mul(1.4).add(0.25)).max(0.06);
+  const radialFalloff = reach.div(localLength).oneMinus().max(0).pow(1.7);
+
+  const brightness = mx_noise_float(
+    radialDirection.mul(frequency * 1.4).add(vec3(3.1, 91.2, 41.5))
+  ).mul(0.5).add(0.5).mul(0.55).add(0.6);
+
+  const flicker = mx_noise_float(
+    radialDirection.mul(2.5).add(vec3(0, streakPhase.mul(0.6), streakPhase.mul(0.4)))
+  ).mul(0.5).add(0.5).mul(0.35).add(0.75);
+
+  // Fade in right at the limb (never brighten the disc itself)
+  // and fade out well before the shell's hard geometric rim.
+  const limbFade = apparentRadius.smoothstep(SUN_RADIUS * 0.98, SUN_RADIUS * 1.015);
+  const rimFade = reach.oneMinus().smoothstep(0, 0.25);
+
+  const strength = streakMask
+    .mul(radialFalloff).mul(brightness).mul(flicker)
+    .mul(limbFade).mul(rimFade)
+    .mul(streakIntensity).mul(weight);
+
+  const color = mix(streakColorInner, streakColorOuter, reach.smoothstep(0, 0.75));
+
+  const material = new THREE.MeshBasicNodeMaterial({
+    side: THREE.BackSide,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  material.outputNode = vec4(color.mul(strength), strength.mul(streakOpacity));
+
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(SUN_RADIUS, 64, 32), material);
+  mesh.scale.setScalar(scale);
+  return mesh;
+}
+
+// Inner shell: many short fine streaks hugging the surface.
+// Outer shells: progressively sparser, wider, fainter wisps.
+const coronaShells = [
+  createCoronaShell({ scale: 1.3, frequency: 14.0, sparsity: 0.0,  weight: 1.0,  drift: 1.0 }),
+  createCoronaShell({ scale: 1.6, frequency: 9.0,  sparsity: 0.18, weight: 0.55, drift: 0.7 }),
+  createCoronaShell({ scale: 2.0, frequency: 5.5,  sparsity: 0.34, weight: 0.32, drift: 0.5 }),
+];
+coronaShells.forEach(shell => sunGroup.add(shell));
+
 // ---------- Apply settings ----------
 
 function applyAxialTilt() {
@@ -335,6 +462,17 @@ glowFolder.add(settings, "coronaIntensity", 0, 3, 0.01).name("Corona intensity")
   .onChange(drawCorona);
 glowFolder.add(settings, "coronaSize", 0.2, 3, 0.01).name("Corona size")
   .onChange(() => { drawCorona(); updateCoronaScale(); });
+
+const streaksFolder = gui.addFolder("Corona streaks");
+streaksFolder.add(settings, "streakIntensity", 0, 3, 0.01).name("Intensity")
+  .onChange(value => { streakIntensity.value = value; });
+streaksFolder.add(settings, "streakLength", 0.05, 1, 0.01).name("Streak length")
+  .onChange(value => { streakLength.value = value; });
+streaksFolder.add(settings, "streakDensity", 0, 1, 0.01).name("Density")
+  .onChange(value => { streakDensity.value = value; });
+streaksFolder.add(settings, "streakSpeed", 0, 2, 0.01).name("Flow speed");
+streaksFolder.add(settings, "streakOpacity", 0, 1, 0.01).name("Opacity")
+  .onChange(value => { streakOpacity.value = value; });
 
 // If the user zooms with the mouse wheel, keep the GUI slider in sync.
 controls.addEventListener("change", () => {
@@ -420,6 +558,11 @@ function animate() {
     spinAngle += deltaTime * BASE_SPIN_SPEED * settings.rotationSpeed;
   }
   sunMesh.rotation.y = spinAngle;
+
+  // Drift the corona noise. Advancing an accumulated phase (rather
+  // than multiplying raw time by speed) means changing the speed
+  // slider never makes the pattern jump.
+  streakPhase.value += deltaTime * settings.streakSpeed;
 
   // Keep the corona slightly behind the Sun along the view direction,
   // so the sphere hides the halo's center and only the ring shows.
