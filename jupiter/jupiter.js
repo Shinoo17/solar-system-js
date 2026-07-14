@@ -13,6 +13,10 @@
 // ============================================================
 
 import * as THREE from "three/webgpu";
+import {
+  cameraPosition, Fn, mx_noise_float, normalView, normalWorldGeometry,
+  positionWorld, texture, uniform, uv, vec2, vec3, vec4,
+} from "three/tsl";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import GUI from "lil-gui";
 
@@ -22,9 +26,19 @@ const TEXTURE_URL = "./texture/8k_jupiter.jpg";
 const PLANET_RADIUS = 2;
 const BASE_SPIN_SPEED = 0.15; // radians per second at speed 1.0
 
+// Beginner config: change this to false to start with a frozen atmosphere.
+// Pausing keeps the latest shader frame, so the image does not jump.
+const CONFIG = {
+  atmosphereAnimation: true,
+};
+
 const settings = {
+  atmosphereAnimation: CONFIG.atmosphereAnimation,
+  windSpeed: 1.0,
+  turbulence: 1.0,
+  redSpotStorm: 1.0,
   autoRotate: true,
-  rotationSpeed: 0.9,
+  rotationSpeed: 0.25,
   axialTiltDegrees: 3.1, // Jupiter stands almost straight up
   cameraDistance: 6.0,
   lightIntensity: 3.2,
@@ -32,6 +46,10 @@ const settings = {
   backIntensity: 0.5,
   roughness: 1.0,
   colorTint: "#ffffff",
+  glowIntensity: 0.9,
+  glowOpacity: 1.0,
+  glowRadius: 1.1,
+  glowColor: "#b89f75",
 };
 
 // ---------- Loading / error helpers ----------
@@ -49,7 +67,7 @@ function showError(error) {
   if (window.location.protocol === "file:") {
     message += "\n\nBrowsers block texture loading from file://." +
       "\nRun a small local server from the project folder:" +
-      "\n\nnnpx serve ." +
+      "\n\nnpx serve ." +
       "\n\nthen open http://localhost:8000/jupiter/jupiter.html";
   }
   errorText.textContent = message;
@@ -72,6 +90,8 @@ function loadTexture(url) {
       url,
       texture => {
         texture.colorSpace = THREE.SRGBColorSpace;
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.ClampToEdgeWrapping;
         texture.anisotropy = renderer.capabilities?.getMaxAnisotropy?.() || 8;
         resolve(texture);
       },
@@ -178,16 +198,149 @@ scene.add(planetGroup);
 
 const planetGeometry = new THREE.SphereGeometry(PLANET_RADIUS, 128, 64);
 
-// StandardMaterial reacts to lights: bright toward the sun light,
-// dark away from it, with a soft terminator line in between.
-// That lighting is what makes the sphere LOOK like a sphere.
-const planetMaterial = new THREE.MeshStandardMaterial({
-  map: planetTexture,
-  roughness: settings.roughness,
+// ---------- Animated atmosphere physics ----------
+// The idea has three simple steps:
+// 1. Wind moves cloud bands in different directions.
+// 2. Turbulence bends the edges between those bands.
+// 3. The Great Red Spot rotates the texture around the storm.
+// Three animation phases are blended to create a smooth loop.
+
+const flowPhase = uniform(0);
+const noiseTime = uniform(0);
+const turbulence = uniform(settings.turbulence);
+const redSpotStorm = uniform(settings.redSpotStorm);
+const animatedTint = uniform(new THREE.Color(settings.colorTint));
+
+function gaussian(value, center, width) {
+  const distance = value.sub(center).div(width);
+  return distance.mul(distance).negate().exp(); // exp(-distance²)
+}
+
+const animatedJupiterColor = Fn(() => {
+  const originalUV = uv();
+  const latitude = originalUV.y.mul(2).sub(1); // -1 south to +1 north
+
+  // Positive and negative speeds make neighboring bands flow in opposite directions.
+  const polarDistance = latitude.div(0.62);
+  const polarDistanceSquared = polarDistance.mul(polarDistance);
+  const polarFade = polarDistanceSquared
+    .mul(polarDistanceSquared)
+    .mul(polarDistanceSquared)
+    .negate()
+    .exp();
+  const wind = gaussian(latitude, 0.00, 0.09)
+    .sub(gaussian(latitude, 0.17, 0.07).mul(0.85))
+    .sub(gaussian(latitude, -0.17, 0.07).mul(0.85))
+    .add(gaussian(latitude, 0.32, 0.05).mul(0.45))
+    .add(gaussian(latitude, -0.32, 0.05).mul(0.45))
+    .sub(gaussian(latitude, 0.46, 0.05).mul(0.25))
+    .sub(gaussian(latitude, -0.46, 0.05).mul(0.25))
+    .mul(polarFade);
+
+  // Turbulence is strongest at the boundaries between wind bands.
+  const shear = gaussian(latitude, 0.095, 0.05)
+    .add(gaussian(latitude, -0.095, 0.05))
+    .add(gaussian(latitude, 0.25, 0.05).mul(0.85))
+    .add(gaussian(latitude, -0.25, 0.05).mul(0.85))
+    .mul(polarFade)
+    .add(0.12);
+
+  function sampleAtmosphere(phase) {
+    const centeredPhase = phase.sub(0.5);
+    const movedX = originalUV.x.add(centeredPhase.mul(0.07).mul(wind));
+
+    const noisePosition = vec3(movedX.mul(6), originalUV.y.mul(12), noiseTime);
+    const noiseX = mx_noise_float(noisePosition)
+      .add(mx_noise_float(noisePosition.mul(2.3)).mul(0.5));
+    const noiseY = mx_noise_float(noisePosition.add(vec3(11.31, 7.77, 3.13)))
+      .add(mx_noise_float(noisePosition.mul(2.3).add(vec3(4.1, 9.2, 1.7))).mul(0.5));
+    const turbulenceOffset = vec2(noiseX, noiseY)
+      .mul(turbulence.mul(0.0065).mul(shear))
+      .mul(centeredPhase.mul(2));
+
+    // This is the approximate Great Red Spot position in the texture.
+    const spotX = movedX.sub(0.362).add(0.5).fract().sub(0.5);
+    const spotDistance = vec2(spotX.mul(2), originalUV.y.sub(0.385));
+    const spotRadius = spotDistance.length().div(0.055);
+    const spotFade = spotRadius.mul(spotRadius).negate().exp();
+    const angle = spotFade.mul(centeredPhase).mul(redSpotStorm).mul(2.4);
+    const rotatedSpot = vec2(
+      spotDistance.x.mul(angle.cos()).sub(spotDistance.y.mul(angle.sin())),
+      spotDistance.x.mul(angle.sin()).add(spotDistance.y.mul(angle.cos())),
+    );
+    const spotOffset = vec2(
+      rotatedSpot.x.sub(spotDistance.x).mul(0.5),
+      rotatedSpot.y.sub(spotDistance.y),
+    );
+
+    const animatedUV = vec2(movedX, originalUV.y)
+      .add(turbulenceOffset)
+      .add(spotOffset);
+    return texture(planetTexture, animatedUV);
+  }
+
+  function phaseWeight(phase) {
+    const sine = phase.mul(Math.PI).sin();
+    return sine.mul(sine);
+  }
+
+  const phase0 = flowPhase.fract();
+  const phase1 = flowPhase.add(1 / 3).fract();
+  const phase2 = flowPhase.add(2 / 3).fract();
+  const color = sampleAtmosphere(phase0).mul(phaseWeight(phase0))
+    .add(sampleAtmosphere(phase1).mul(phaseWeight(phase1)))
+    .add(sampleAtmosphere(phase2).mul(phaseWeight(phase2)))
+    .div(1.5);
+
+  // Slightly darken the edge where we see the atmosphere at an angle.
+  const viewAngle = normalView.z.clamp(0, 1);
+  const limbDarkening = viewAngle.pow(0.55).mul(0.42).add(0.62);
+  return color.rgb.mul(limbDarkening).mul(animatedTint);
 });
 
-const planetMesh = new THREE.Mesh(planetGeometry, planetMaterial);
+const animatedMaterial = new THREE.MeshStandardNodeMaterial({
+  roughness: settings.roughness,
+  metalness: 0,
+});
+animatedMaterial.colorNode = animatedJupiterColor();
+
+// Keep one material at all times. Pausing only stops the shader clock.
+const planetMesh = new THREE.Mesh(planetGeometry, animatedMaterial);
 planetGroup.add(planetMesh);
+
+// ---------- Atmosphere glow ----------
+// This uses the same edge-band effect as the original Jupiter and Earth.
+// It fades in near the silhouette, then fades out at the outer edge.
+const glowIntensity = uniform(settings.glowIntensity);
+const glowOpacity = uniform(settings.glowOpacity);
+const glowColor = uniform(new THREE.Color(settings.glowColor));
+
+const glowViewDirection = cameraPosition.sub(positionWorld).normalize();
+const edgeCloseness = normalWorldGeometry
+  .dot(glowViewDirection)
+  .abs()
+  .oneMinus();
+const glowFadeIn = edgeCloseness.smoothstep(0.10, 0.45);
+const glowFadeOut = edgeCloseness.oneMinus().smoothstep(0.10, 0.55);
+const glowBand = glowFadeIn.mul(glowFadeOut);
+const haze = glowBand.pow(1.4).mul(glowIntensity);
+
+const glowMaterial = new THREE.MeshBasicNodeMaterial({
+  transparent: true,
+  side: THREE.BackSide,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false,
+  depthTest: true,
+  toneMapped: false,
+});
+glowMaterial.outputNode = vec4(
+  glowColor.mul(haze),
+  haze.mul(0.55).mul(glowOpacity),
+);
+
+const glowMesh = new THREE.Mesh(planetGeometry, glowMaterial);
+glowMesh.scale.setScalar(settings.glowRadius);
+planetGroup.add(glowMesh);
 
 // ---------- Apply settings ----------
 
@@ -214,10 +367,29 @@ applyAxialTilt();
 const gui = new GUI({ title: "Jupiter" });
 
 const planetFolder = gui.addFolder("Planet");
+planetFolder.add(settings, "atmosphereAnimation")
+  .name("Atmosphere animation");
 planetFolder.add(settings, "autoRotate").name("Auto rotate");
 planetFolder.add(settings, "rotationSpeed", 0, 2, 0.01).name("Rotation speed");
 planetFolder.add(settings, "axialTiltDegrees", -180, 180, 0.1)
   .name("Axial tilt (deg)").onChange(applyAxialTilt);
+
+const atmosphereFolder = gui.addFolder("Atmosphere physics");
+atmosphereFolder.add(settings, "windSpeed", 0, 3, 0.01).name("Wind flow");
+atmosphereFolder.add(settings, "turbulence", 0, 2.5, 0.01)
+  .name("Turbulence").onChange(value => { turbulence.value = value; });
+atmosphereFolder.add(settings, "redSpotStorm", 0, 1.5, 0.01)
+  .name("Red Spot storm").onChange(value => { redSpotStorm.value = value; });
+
+const glowFolder = gui.addFolder("Atmosphere glow");
+glowFolder.add(settings, "glowIntensity", 0, 2, 0.01).name("Outer glow")
+  .onChange(value => { glowIntensity.value = value; });
+glowFolder.add(settings, "glowOpacity", 0, 1, 0.01).name("Glow opacity")
+  .onChange(value => { glowOpacity.value = value; });
+glowFolder.add(settings, "glowRadius", 1.01, 1.35, 0.001).name("Glow radius")
+  .onChange(value => { glowMesh.scale.setScalar(value); });
+glowFolder.addColor(settings, "glowColor").name("Glow color")
+  .onChange(value => { glowColor.value.set(value); });
 
 const cameraFolder = gui.addFolder("Camera");
 const distanceController = cameraFolder
@@ -234,9 +406,9 @@ lightingFolder.add(settings, "backIntensity", 0, 3, 0.01).name("Rim light")
 
 const materialFolder = gui.addFolder("Material");
 materialFolder.add(settings, "roughness", 0, 1, 0.01).name("Roughness")
-  .onChange(value => { planetMaterial.roughness = value; });
+  .onChange(value => { animatedMaterial.roughness = value; });
 materialFolder.addColor(settings, "colorTint").name("Color tint")
-  .onChange(value => { planetMaterial.color.set(value); });
+  .onChange(value => { animatedTint.value.set(value); });
 
 // If the user zooms with the mouse wheel, keep the GUI slider in sync.
 controls.addEventListener("change", () => {
@@ -306,9 +478,27 @@ window.addEventListener("resize", () => {
 loadingOverlay.classList.add("hidden");
 
 const clock = new THREE.Clock();
+let currentFlowPhase = 0;
+let currentNoiseTime = 0;
+let noiseDirection = 1;
 
 function animate() {
   const deltaTime = clock.getDelta();
+
+  // Pausing stops time, so the atmosphere stays on its latest frame.
+  if (settings.atmosphereAnimation) {
+    currentFlowPhase = (
+      currentFlowPhase + deltaTime * 0.06 * settings.windSpeed
+    ) % 1;
+    flowPhase.value = currentFlowPhase;
+
+    currentNoiseTime += deltaTime * 0.05 * noiseDirection;
+    if (currentNoiseTime > 240 || currentNoiseTime < 0) {
+      noiseDirection *= -1;
+      currentNoiseTime = THREE.MathUtils.clamp(currentNoiseTime, 0, 240);
+    }
+    noiseTime.value = currentNoiseTime;
+  }
 
   // Auto rotation (paused while the user is dragging the planet)
   if (settings.autoRotate && !draggingPlanet) {
