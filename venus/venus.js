@@ -53,7 +53,7 @@ const settings = {
   lightIntensity: 3.2,
   fillIntensity: 0.9,   // thick cloud deck bounces light onto the shadow side
   backIntensity: 0.5,
-  glowIntensity: 0.85, // strength of the atmosphere haze band
+  glowIntensity: 0.65, // strength of the atmosphere haze band
   glowOpacity: 1.0,
   glowRadius: 1.1,     // size of the haze shell (times planet radius)
   roughness: 0.85,

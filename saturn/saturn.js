@@ -53,7 +53,7 @@ const settings = {
   lightIntensity: 2.4,
   fillIntensity: 0.35,
   backIntensity: 0.9,
-  glowIntensity: 0.85,     // subtle haze band on the planet's edge
+  glowIntensity: 0.5,     // subtle haze band on the planet's edge
   glowOpacity: 0.9,
   glowRadius: 1.12,        // size of the haze shell (times planet radius)
   roughness: 0.95,

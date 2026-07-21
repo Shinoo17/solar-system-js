@@ -46,7 +46,7 @@ const settings = {
   backIntensity: 0.5,
   roughness: 1.0,
   colorTint: "#ffffff",
-  glowIntensity: 0.9,
+  glowIntensity: 0.65,
   glowOpacity: 1.0,
   glowRadius: 1.1,
   glowColor: "#b89f75",
