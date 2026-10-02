@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="th">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -8,16 +8,13 @@
 
   <!-- Import map: tells the browser where to fetch the libraries.
        No build tools needed — this works as a plain static page.
-       This page uses the WebGPU build of Three.js and TSL
-       (Three Shading Language) for the glow material. -->
+       This page uses the WebGL build of Three.js with custom GLSL shaders. -->
   <script type="importmap">
   {
     "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.181.0/build/three.webgpu.js",
-      "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.181.0/build/three.webgpu.js",
-      "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.181.0/build/three.tsl.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.181.0/examples/jsm/",
-      "lil-gui": "https://cdn.jsdelivr.net/npm/lil-gui@0.20.0/dist/lil-gui.esm.min.js"
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+      "lil-gui": "https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.esm.min.js"
     }
   }
   </script>
@@ -33,7 +30,7 @@
   <!-- Tiny FPS readout; toggled from the control panel -->
   <div id="fpsMeter" class="fps-meter" aria-hidden="true">— fps</div>
 
-  <!-- Shown while the texture is loading -->
+  <!-- Shown until the first frame is rendered -->
   <div id="loading" class="overlay">
     <div class="overlay-panel">
       <div class="pulse-dot"></div>
@@ -41,7 +38,7 @@
     </div>
   </div>
 
-  <!-- Shown only if something fails (for example a missing texture) -->
+  <!-- Shown only if something fails (for example a shader compile error) -->
   <div id="error" class="overlay error hidden">
     <div class="overlay-panel">
       <div class="pulse-dot"></div>
